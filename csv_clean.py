@@ -3,25 +3,16 @@ import timeit
 
 clean_file = open('clean_stops.csv', mode='w')
 csv_writer = csv.writer(clean_file, delimiter=',')
+csv_writer.writerow(['trip_id', 'stop_id', 'stop_sequence'])
+
 
 
 def read_stops(file, writer):
 
 	csv_reader = csv.reader(file, delimiter=',')
-
-	prev_stop = 'NONE'
-	trip = 'NONE'
 	next(csv_reader)
-	writer.writerow(['trip_id', 'arrival_time', 'stop_id', 'prev_id'])
 	for row in csv_reader:
-		if row[0] != trip:
-			row[4] = row[3]
-			trip = row[0]
-			prev_stop = row[3]
-			writer.writerow([row[0], row[1], row[3], row[3]])
-		else:
-			writer.writerow([row[0], row[1], row[3], prev_stop])
-			prev_stop = row[3]
+		writer.writerow(row[0],row[3],row[4])
 
 with open('google_transit_bronx/stop_times.txt', newline='', mode='r') as bronx:
 
