@@ -129,18 +129,20 @@ if __name__ == '__main__':
 	print('='*12)
 	print('='*12)
 
-	minned_sorted.select(minned_sorted['trip_id'], \
+	min_win = minned_sorted.select(minned_sorted['trip_id'], \
 		minned_sorted['stop_id'], \
 		minned_sorted['stop_sequence'], \
 		minned_sorted['min_timestamp'], \
 		time_delta.alias('time_delta'), \
 		seq_delta.alias('seq_delta'), \
-		time_per_stop.alias('time/stop')).show()
+		time_per_stop.alias('time/stop'))
+
+	min_win.show()
 
 	stop_times_join = stop_times.join(minned_sorted, ['trip_id', 'stop_id', 'stop_sequence'], 'left_outer')
 
 	print('JOIN')
-	stop_times.show()
+	stop_times_join.show()
 
         # After that, map days of the week and time windows.
 
