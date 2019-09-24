@@ -68,30 +68,33 @@ if __name__ == '__main__':
         
         # joined_df = sdfData.join(stop_times, on=condition, how='inner')
 	
-        joined_df = sdfData.join(stop_times, ['trip_id', 'stop_id'])
+       	minned_df = sdfData.join(stop_times, ['trip_id', 'stop_id']) \
+			.groupby('trip_id', 'stop_id', 'stop_sequence') \
+			.agg(f.min('timestamp').alias('min_timestamp')) \
+			.orderBy('trip_id', 'stop_id') 
+			# .select(f.col("min(timestamp)").alias("min_timestamp"))
+	# assert len(joined_df.head(1)) != 0
 
-	assert len(joined_df.head(1)) != 0
+        # print('JOINED_DF')
+        # print('-'*12)
 
-        print('JOINED_DF')
-        print('-'*12)
+	# properties = {
+          #  "user": "postgres",
+           # "password": "postgres"
+       # }
 
-	properties = {
-            "user": "postgres",
-            "password": "postgres"
-        }
-
-        joined_df.show()
+        #joined_df.show()
 
 	# joined_df.write.jdbc(url=config.url, \
           #      table="sts", mode='overwrite', properties=properties)	
 
 
 
-        print(joined_df.schema.names)
-        print('-'*12)
+        # print(joined_df.schema.names)
+        # print('-'*12)
 
-        minned_df = joined_df.groupby('trip_id', 'stop_id', 'stop_sequence') \
-                .agg(f.min('timestamp').alias('min_timestamp')).orderBy('trip_id', 'stop_id')
+        # minned_df = joined_df.groupby('trip_id', 'stop_id', 'stop_sequence') \
+          #      .agg(f.min('timestamp').alias('min_timestamp')).orderBy('trip_id', 'stop_id')
 
 	assert len(minned_df.head(1)) != 0
 
@@ -99,29 +102,28 @@ if __name__ == '__main__':
 	print('='*12)
 	print('='*12)
 	minned_df.show()
-	print(minned_df.schema.names)
-
+	
 	print('Printed schema')
 	minned_df.printSchema()
 	
 	# In order to use a physical window function, we sort by trip_id and timestamp
 
-	columns = ['trip_id', 'min_timestamp']
-	minned_sorted = minned_df.orderBy(columns, ascending=[0, 1])
+	# columns = ['trip_id', 'min_timestamp']
+	# minned_sorted = minned_df.orderBy(columns, ascending=[0, 1])
 
-	assert len(minned_sorted.head(1)) != 0
+	# assert len(minned_sorted.head(1)) != 0
 
-	print('MINNED SORTED')
-	print('='*12)
-	minned_sorted.show()
+	# print('MINNED SORTED')
+	# print('='*12)
+	# minned_sorted.show()
 
 	window_spec = Window \
 		.partitionBy('trip_id') \
 		.orderBy('min_timestamp')
 	
-	time_delta = minned_sorted.min_timestamp.cast('long') - f.lag(minned_sorted.min_timestamp).over(window_spec).cast('long')
+	time_delta = minned_df.min_timestamp.cast('long') - f.lag(minned_df.min_timestamp).over(window_spec).cast('long')
 
-	seq_delta = minned_sorted.stop_sequence - f.lag(minned_sorted.stop_sequence).over(window_spec)
+	seq_delta = minned_df.stop_sequence - f.lag(minned_df.stop_sequence).over(window_spec)
 
 	time_per_stop = time_delta / seq_delta
 
@@ -129,17 +131,30 @@ if __name__ == '__main__':
 	print('='*12)
 	print('='*12)
 
-	min_win = minned_sorted.select(minned_sorted['trip_id'], \
-		minned_sorted['stop_id'], \
-		minned_sorted['stop_sequence'], \
-		minned_sorted['min_timestamp'], \
+	min_win = minned_df.select(minned_df['trip_id'], \
+		minned_df['stop_id'], \
+		minned_df['stop_sequence'], \
+		minned_df['min_timestamp'], \
 		time_delta.alias('time_delta'), \
 		seq_delta.alias('seq_delta'), \
 		time_per_stop.alias('time/stop'))
 
 	min_win.show()
 
-	stop_times_join = stop_times.join(minned_sorted, ['trip_id', 'stop_id', 'stop_sequence'], 'left_outer')
+	stop_times_join = stop_times.join(min_win, ['trip_id', 'stop_id', 'stop_sequence'], 'left_outer')
+	stop_times_join = stop_times_join.withColumn('prev_stop', f.lag(stop_times_join.stop_id).over(window_spec))
+	
+	new_window = Window \
+		.partitionBy('trip_id') \
+		.orderBy('min_timestamp') \
+		.rowsBetween(0, sys.maxsize)
+
+	# Thanks to John Paton for forward fill (altered here for backward fill).
+	# https://johnpaton.net/posts/forward-fill-spark/
+
+	filled = f.last(stop_times_join['time/stop'], ignorenulls=True).over(new_window)
+
+	stop_times_join = stop_times_join.withColumn('filled', filled)
 
 	print('JOIN')
 	stop_times_join.show()
