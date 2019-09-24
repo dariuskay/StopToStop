@@ -1,13 +1,20 @@
 from pyspark.sql import SparkSession
 from pyspark.sql import SQLContext
+from pyspark.sql.window import Window
+from pyspark.sql import types
 import pyspark.sql.functions as f
+import sys
 import copy
-from config import *
+# from config import *
+import config
 
 if __name__ == '__main__':
 
         # Creates SparkSession
         scSpark = SparkSession.builder.appName('Stop to Stop').getOrCreate()
+	scSpark.sparkContext.setLogLevel("ERROR")
+	# And SQLContext
+	sqlCon = SQLContext(scSpark)	
 
         # Any csv's that start with '2019-09-', or all files from September 2019.
         # Each week is approximately 8,906,000 rows.
@@ -20,6 +27,7 @@ if __name__ == '__main__':
                 data_file = sys.argv[2]
 
         stop_times = scSpark.read.csv(stops_file, header=True, sep=',')
+	stop_times = stop_times.withColumn('stop_sequence', stop_times['stop_sequence'].cast('double'))
 
         print('-'*12)
         print('-'*12)
@@ -27,6 +35,11 @@ if __name__ == '__main__':
         stop_times.show()
 
         assert stop_times.schema.names is not None
+	
+	print('='*20)
+	print('STOP TIMES SCHEMA')
+	print(stop_times.schema.names)
+	print('='*20)
 
         # Read csv, put into dataframe. Store in memory.
         sdfData = scSpark.read.csv(data_file, header=True, sep=',').cache()
@@ -36,52 +49,102 @@ if __name__ == '__main__':
                 'progress', 'block_assigned', 'dist_along_route', 'dist_from_stop')
 
         sdfData = sdfData.select([column for column in sdfData.columns if column not in cols_to_drop])
-
+	
+	sdfData = sdfData.withColumn('timestamp', sdfData['timestamp'].cast('timestamp'))
+	
         # sdfData = sdfData.drop(sdfData.vehicle_id).collect()
 
 
-
+	print('='*20)
+        print('UPDATES SCHEMA')
         print(sdfData.schema.names)
+        print('='*20)
+
         print('-'*12)
         print('UPDATES')
         sdfData.show()
 
         condition = ['trip_id', 'stop_id']
         
-        joined_df = sdfData.join(stop_times, on=condition, how='inner')
+        # joined_df = sdfData.join(stop_times, on=condition, how='inner')
+	
+        joined_df = sdfData.join(stop_times, ['trip_id', 'stop_id'])
 
-        assert len(joined_df.head(1)) != 0
+	assert len(joined_df.head(1)) != 0
 
         print('JOINED_DF')
         print('-'*12)
 
+	properties = {
+            "user": "postgres",
+            "password": "postgres"
+        }
+
         joined_df.show()
+
+	# joined_df.write.jdbc(url=config.url, \
+          #      table="sts", mode='overwrite', properties=properties)	
+
+
 
         print(joined_df.schema.names)
         print('-'*12)
 
-        minned_df = sdfData.groupby('trip_id', 'stop_id') \
-                .agg(f.min('timestamp')).alias('min_timestamp').orderBy('trip_id', 'stop_id')
+        minned_df = joined_df.groupby('trip_id', 'stop_id', 'stop_sequence') \
+                .agg(f.min('timestamp').alias('min_timestamp')).orderBy('trip_id', 'stop_id')
 
-        _schema = copy.deepcopy(X.schema)
-        minned_twinned = X.rdd.zipWithIndex().toDF(_schema)
+	assert len(minned_df.head(1)) != 0
 
-        # Thanks to @christinebuckler for the Spark dataframe deepcopy.
+	print('MINNED DF')
+	print('='*12)
+	print('='*12)
+	minned_df.show()
+	print(minned_df.schema.names)
 
-        ultimate_df = sqlContext.sql("SELECT max(minned_twinned.min_timestamp) as last_ts, \
-                max(minned_twinned.stop_sequence) as last_seq, minned_df.* \
-                FROM minned_df LEFT JOIN minned_twinned ON minned_df.trip_id = minned_twinned.trip_id \
-                WHERE minned_twinned.stop_sequence < minned_df.stop_sequence") # Still have my doubts that this can work...
+	print('Printed schema')
+	minned_df.printSchema()
+	
+	# In order to use a physical window function, we sort by trip_id and timestamp
 
+	columns = ['trip_id', 'min_timestamp']
+	minned_sorted = minned_df.orderBy(columns, ascending=[0, 1])
 
-        ultimate_df.withColumn('time_delta', ultimate_df.timestamp - ultimate_df.last_ts)
-        ultimate_df.withColumn('seq_delta', ultimate_df.sequence - ultimate_df.last_seq)
+	assert len(minned_sorted.head(1)) != 0
 
-        # WHAT NOW?? Seems like it's time to do a left join with stops again, but how to map the averages?
+	print('MINNED SORTED')
+	print('='*12)
+	minned_sorted.show()
+
+	window_spec = Window \
+		.partitionBy('trip_id') \
+		.orderBy('min_timestamp')
+	
+	time_delta = minned_sorted.min_timestamp.cast('long') - f.lag(minned_sorted.min_timestamp).over(window_spec).cast('long')
+
+	seq_delta = minned_sorted.stop_sequence - f.lag(minned_sorted.stop_sequence).over(window_spec)
+
+	time_per_stop = time_delta / seq_delta
+
+	print('MINNED WINDOW')
+	print('='*12)
+	print('='*12)
+
+	minned_sorted.select(minned_sorted['trip_id'], \
+		minned_sorted['stop_id'], \
+		minned_sorted['stop_sequence'], \
+		minned_sorted['min_timestamp'], \
+		time_delta.alias('time_delta'), \
+		seq_delta.alias('seq_delta'), \
+		time_per_stop.alias('time/stop')).show()
+
+	stop_times_join = stop_times.join(minned_sorted, ['trip_id', 'stop_id', 'stop_sequence'], 'left_outer')
+
+	print('JOIN')
+	stop_times.show()
 
         # After that, map days of the week and time windows.
 
-        ultimate_df.show()
+        # ultimate_df.show()
 
 
         properties = {
@@ -89,5 +152,5 @@ if __name__ == '__main__':
             "password": "postgres"
         }
 
-        df.write.jdbc(url='jdbc:postgresql://database-4.ceegl9gaalwk.us-west-2.rds.amazonaws.com:5432/metrics', \
-                table="sts", mode='overwrite', properties=properties)
+        # ultimate_df.write.jdbc(url=config.url, \
+          #      table="data", mode='overwrite', properties=properties)
