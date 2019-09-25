@@ -156,6 +156,10 @@ if __name__ == '__main__':
 
 	stop_times_join = stop_times_join.withColumn('filled', filled)
 
+	stop_times_join.withColumn('day', f.dayofweek(stop_times_join['min_timestamp']))
+	
+	stop_times_join.withColumn('hour', f.hour(stop_times_join['min_timestamp']))
+
 	print('JOIN')
 	stop_times_join.show()
 
@@ -168,6 +172,8 @@ if __name__ == '__main__':
             "user": "postgres",
             "password": "postgres"
         }
+	
+	
 
-        # ultimate_df.write.jdbc(url=config.url, \
-          #      table="data", mode='overwrite', properties=properties)
+        stop_times_join.write.jdbc(url=config.url, \
+                table="data", mode='overwrite', properties=properties)
