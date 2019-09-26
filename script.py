@@ -27,24 +27,25 @@ def pos_stop_initial_join(stops_df, pos_df):
 	common_cols = ['trip_id', 'stop_id']
 	return pos_df.join(stops_df, common_cols) \
 		.groupby('trip_id', 'stop_id', 'stop_sequence') \
-		.agg(f.min('timestamp').alias('min_timestamp')) \
+		.agg(f.min('timestamp').alias('min_timestamp'), \
+		f.first('route_id').alias('route_id')) \
 		.orderBy(*common_cols)
 
 def time_delta(df, window):
-	return df['min_timestamp'].cast('long') - f.lag(df['min_timestamp']).over(window)
+	return df['min_timestamp'].cast('long') - f.lag(df['min_timestamp']).over(window).cast('long')
 
 def df_with_window_time_diff(df, window):
 	
 	seq_delta = df['stop_sequence'] - f.lag(df['stop_sequence']).over(window)
-	time_delta = time_delta(df, window)
-	time_per_stop = seq_delta / time_delta
+	time = time_delta(df, window)
+	time_per_stop = time / seq_delta
 
 	return df.select(df['trip_id'], \
 		df['stop_id'], \
 		df['route_id'], \
 		df['stop_sequence'], \
 		df['min_timestamp'], \
-		time_delta.alias('time_delta'), \
+		time.alias('time_delta'), \
 		seq_delta.alias('seq_delta'), \
 		time_per_stop.alias('time/stop'))
 
@@ -52,17 +53,24 @@ def join_window_df_with_stops_df(windowdf, stopsdf):
 	common_cols = ['trip_id', 'stop_id', 'stop_sequence']
 	return stopsdf.join(windowdf, common_cols, 'left_outer')
 
+def join_window_df_with_stops_df_sql(table1, table2, sqlContext):
+	to_join =  sqlContext.sql('SELECT * FROM '+table1+' WHERE '+table1+'.trip_id IN (SELECT DISTINCT trip_id FROM '+table2+')')
+	to_join.createOrReplaceTempView('subqueried')
+	return sqlContext.sql('SELECT subqueried.*, '+table2+'.route_id, '+table2+'.min_timestamp, '+table2+'.time_delta, '+table2+'.seq_delta, '+table2+'.`time/stop` FROM subqueried LEFT JOIN '+table2+' ON subqueried.trip_id='+table2+'.trip_id AND subqueried.stop_id='+table2+'.stop_id AND subqueried.stop_sequence='+table2+'.stop_sequence ORDER BY trip_id, stop_sequence')	
+
+
 def df_with_window_backfill(df, window1, window2):
 	last_stop_id = f.lag(df['stop_id']).over(window1)
 	
 	df = df.withColumn('prev_stop', last_stop_id)
+	df = df.withColumn('filled_ts', f.first(df['time/stop'], ignorenulls=True).over(window2))
+	df = df.withColumn('day', f.first(f.dayofweek(df['min_timestamp']), ignorenulls=True).over(window2))
+	df = df.withColumn('hour', f.first(f.hour(df['min_timestamp']), ignorenulls=True).over(window2))
 	
-	time_per_stop_backfilled = f.last(df['time/stop'], ignorenulls=True).over(window2))
-
-	df = df.withColumn('filled_ts', time_per_stop_backfilled)
-
-	df = df.withColumn('day', f.dayofweek(df['min_timestamp']))
-	df = df.withColumn('hour', f.hour(df['min_timestamp']))
+	columns_to_return = ['trip_id', 'stop_id', 'prev_stop', 'stop_sequence', 'route_id', 'filled_ts', 'day', 'hour']
+	df = df.filter(df.filled_ts.isNotNull()) \
+		.filter((df.filled_ts > 0)) \
+		.select(*columns_to_return)
 
 	return df
 
@@ -103,7 +111,7 @@ if  __name__ == '__main__':
         print('UPDATES')
         updates_df.show()
 	
-       	minned_df = stop_pos_initial_join(stops_df, updates_df)
+       	minned_df = pos_stop_initial_join(stops_df, updates_df)
 	
 	assert len(minned_df.head(1)) != 0
 
@@ -121,22 +129,37 @@ if  __name__ == '__main__':
 	
 	window_df = df_with_window_time_diff(minned_df, window_look_back_one)
 
-	stop_times_joined_df = join_window_df_with_stops_df(window_df, stops_df)
+	print('WINDOW')
+	window_df.show()
+
 	
+	window_df.createOrReplaceTempView('window_df')
+	stops_df.createOrReplaceTempView('stops')
+
+	# stop_times_joined_df = join_window_df_with_stops_df(window_df, stops_df)
+	stop_times_joined_df = join_window_df_with_stops_df_sql('stops', 'window_df', sqlCon)	
+	
+	print('REDUCED')
+	stop_times_joined_df.show()
+
 	window_look_forward_many = Window \
 		.partitionBy('trip_id') \
-		.orderBy('min_timestamp') \
+		.orderBy('trip_id', 'stop_sequence') \
 		.rowsBetween(0, sys.maxsize)
 
 	# Thanks to John Paton for forward fill (altered here for backward fill).
 	# https://johnpaton.net/posts/forward-fill-spark/
 	
 	df_backfilled = df_with_window_backfill(stop_times_joined_df, window_look_back_one, window_look_forward_many)
+	
+	print('BACKFILLED, CLEANED')
+
+	df_backfilled.show()	
 
 	properties = {
             "user": "postgres",
             "password": "postgres"
         }
 	
-        stop_times_join.write.jdbc(url=config.url, \
+        df_backfilled.write.jdbc(url=config.url, \
                 table="data", mode='overwrite', properties=properties)
