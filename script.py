@@ -2,6 +2,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql import SQLContext
 from pyspark.sql.window import Window
 from pyspark.sql import types
+from pyspark.sql.functions import udf
 import pyspark.sql.functions as f
 import sys
 import copy
@@ -9,11 +10,13 @@ import copy
 import config
 
 def stop_times_to_df(file, sparkSession):
+	""" Imports `file` to sparkSession, creating and returning a DataFrame"""
 	df = sparkSession.read.csv(file, header=True, sep=',')
 	df = df.withColumn('stop_sequence', df['stop_sequence'].cast('int'))
 	return df
 
 def vehicle_pos_to_df(file, sparkSession):
+	""" Imports vehicle position csv and creates a DataFrame. Drops unnecessary columns."""
 	cols_to_drop = ('vehicle_id', 'vehicle_label', 'vehicle_license_plate', \
 		'trip_start_time', 'bearing', 'speed', 'stop_status', 'occupancy_status', \
 		'congestion_level', 'progress', 'block_assigned', 'dist_along_route', 'dist_from_stop')
@@ -24,6 +27,8 @@ def vehicle_pos_to_df(file, sparkSession):
 	return df
 
 def pos_stop_initial_join(stops_df, pos_df):
+	""" Joins schedule DataFrame with positions DataFrame. Returns a DataFrame
+	with only the minimum timestamp per stop in stop sequence."""
 	common_cols = ['trip_id', 'stop_id']
 	return pos_df.join(stops_df, common_cols) \
 		.groupby('trip_id', 'stop_id', 'stop_sequence') \
@@ -32,10 +37,13 @@ def pos_stop_initial_join(stops_df, pos_df):
 		.orderBy(*common_cols)
 
 def time_delta(df, window):
+	""" Performs subtraction over timestamps, returning the difference between a timestamp
+	and the latest timestamp for that trip_id. Returns difference in seconds."""
 	return df['min_timestamp'].cast('long') - f.lag(df['min_timestamp']).over(window).cast('long')
 
 def df_with_window_time_diff(df, window):
-	
+	""" Performs subtraction over latest stop sequence and current stop_sequence in order
+	to calculate time per stop between timestamps. Adds result as column in DataFrame. Returns DataFrame."""
 	seq_delta = df['stop_sequence'] - f.lag(df['stop_sequence']).over(window)
 	time = time_delta(df, window)
 	time_per_stop = time / seq_delta
@@ -50,16 +58,29 @@ def df_with_window_time_diff(df, window):
 		time_per_stop.alias('time/stop'))
 
 def join_window_df_with_stops_df(windowdf, stopsdf):
+	""" Performs a left join on windowed DataFrame with schedule DataFrame."""
 	common_cols = ['trip_id', 'stop_id', 'stop_sequence']
 	return stopsdf.join(windowdf, common_cols, 'left_outer')
 
 def join_window_df_with_stops_df_sql(table1, table2, sqlContext):
+	""" In lieu of the non-SQL version working, filters schedule for trip_ids in 
+	windowed stops table (significantly reducing table size). That result is joined
+	with windowed stops table, returning DataFrame."""
 	to_join =  sqlContext.sql('SELECT * FROM '+table1+' WHERE '+table1+'.trip_id IN (SELECT DISTINCT trip_id FROM '+table2+')')
+	print('FROM WITHIN join_window_df_with_stops_df_sql')
+	print('SUBQUERIED')
+	to_join.show()
 	to_join.createOrReplaceTempView('subqueried')
+	
 	return sqlContext.sql('SELECT subqueried.*, '+table2+'.route_id, '+table2+'.min_timestamp, '+table2+'.time_delta, '+table2+'.seq_delta, '+table2+'.`time/stop` FROM subqueried LEFT JOIN '+table2+' ON subqueried.trip_id='+table2+'.trip_id AND subqueried.stop_id='+table2+'.stop_id AND subqueried.stop_sequence='+table2+'.stop_sequence ORDER BY trip_id, stop_sequence')	
 
 
 def df_with_window_backfill(df, window1, window2):
+	""" Provides new rows (generated from schedule) so that for each trip_id, intermediate
+	stop_ids are included. For each of these new stop_ids, backfill via window time/stop. Maps week of year,
+	day of week, week of year.
+	Returns a DataFrame where no time/stop value is less than 0 (for the case in which a trip erroneously
+	'starts over.'"""
 	last_stop_id = f.lag(df['stop_id']).over(window1)
 	
 	df = df.withColumn('prev_stop', last_stop_id)
@@ -74,6 +95,7 @@ def df_with_window_backfill(df, window1, window2):
 
 	return df
 
+replace_dummy = udf(lambda timefill: None if timefill == 6666.6666 else timefill, types.DoubleType())
 
 if  __name__ == '__main__':
 
@@ -132,12 +154,16 @@ if  __name__ == '__main__':
 	print('WINDOW')
 	window_df.show()
 
+	window_df_filled = window_df.fillna(6666.6666, subset=['time/stop'])
 	
-	window_df.createOrReplaceTempView('window_df')
+	print('WINDOW FILLEDNA')
+	window_df_filled.show()
+
+	window_df_filled.createOrReplaceTempView('window_filled')
 	stops_df.createOrReplaceTempView('stops')
 
 	# stop_times_joined_df = join_window_df_with_stops_df(window_df, stops_df)
-	stop_times_joined_df = join_window_df_with_stops_df_sql('stops', 'window_df', sqlCon)	
+	stop_times_joined_df = join_window_df_with_stops_df_sql('stops', 'window_filled', sqlCon)	
 	
 	print('REDUCED')
 	stop_times_joined_df.show()
@@ -151,11 +177,23 @@ if  __name__ == '__main__':
 	# https://johnpaton.net/posts/forward-fill-spark/
 	
 	df_backfilled = df_with_window_backfill(stop_times_joined_df, window_look_back_one, window_look_forward_many)
+
+	print('BACKFILLED, DIRTY')
+	df_backfilled.show()
 	
-	print('BACKFILLED, CLEANED')
+#	df_backfilled = df_backfilled.filter((df_backfilled.route_id.isNotNull()) & (df_backfilled.filled_ts != 6666.6666
+#	df_backfilled = df_backfilled.filter('route_id IS NOT NULL AND filled_ts != 6666.6666')
+	df_backfilled = df_backfilled.filter('filled_ts != 6666.6666')
+	
+	print('BACKFILLED, FILTERED')
+	df_backfilled.show()
 
-	df_backfilled.show()	
-
+#	df_backfilled = df_backfilled.withColumn('filled_ts', replace_dummy(df_backfilled.filled_ts))	
+	
+#	print('BACKFILLED, CLEANED')
+#	df_backfilled.show()	
+	
+	print('Writing to database...')
 	properties = {
             "user": "postgres",
             "password": "postgres"
