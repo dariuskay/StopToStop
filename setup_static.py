@@ -9,30 +9,30 @@ def read(file, writer, subject):
 	if subject=='stop_times':
 		for row in csv_reader:
 			writer.writerow([row[0],row[1],row[3],row[4]])
-	else if subject=='stops':
+	elif subject=='stops':
 		for row in csv_reader:
 			writer.writerow([row[0],row[1],row[3],row[4]])
-	else if subject=='trips':
+	elif subject=='trips':
 		for row in csv_reader:
 			writer.writerow([row[0],row[2]])
 
-def open(path, borough, writer, subject):
-	with open(path+borough+'/'+subject+'.txt', newline='', mode='r') as f:
+def open_for_read(path, borough, writer, subject):
+	with open((path+borough+'/'+subject+'.txt'), 'r',  newline='') as f:
 		print(borough+' is starting.')
 		read(f, writer, subject)
 		print('-'*12)
 
 def work(subject, boroughs, path):
-	clean_file = open(+subject'_agglom.csv', mode='w')
+	clean_file = open((subject+'_agglom.csv'), 'w')
 	csv_writer = csv.writer(clean_file, delimiter=',')
 	csv_writer.writerow(subject_dict[subject])
 
 	for borough in boroughs:
-		open(path, borough, csv_writer, subject)
+		open_for_read(path, borough, csv_writer, subject)
 	clean_file.close()
 
 
-if __name__='__main__':
+if __name__=='__main__':
 	path = '../data/'
 
 	if len(sys.argv) != 2:
