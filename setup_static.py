@@ -2,14 +2,13 @@ import csv
 import timeit
 import sys
 
-
-def read_stops(file, writer, subject):
+def read(file, writer, subject):
 
 	csv_reader = csv.reader(file, delimiter=',')
 	next(csv_reader)
 	if subject=='stop_times':
 		for row in csv_reader:
-			writer.writerow([row[0],row[3],row[4]])
+			writer.writerow([row[0],row[1],row[3],row[4]])
 	else if subject=='stops':
 		for row in csv_reader:
 			writer.writerow([row[0],row[1],row[3],row[4]])
@@ -20,7 +19,7 @@ def read_stops(file, writer, subject):
 def open(path, borough, writer, subject):
 	with open(path+borough+'/'+subject+'.txt', newline='', mode='r') as f:
 		print(borough+' is starting.')
-		read_stops(f, writer)
+		read(f, writer, subject)
 		print('-'*12)
 
 def work(subject, boroughs, path):
@@ -41,7 +40,7 @@ if __name__='__main__':
 	else:
 		path = sys.argv[1]
 
-	subject_dict = {'stop_times': ['trip_id', 'stop_id', 'stop_sequence'], \
+	subject_dict = {'stop_times': ['trip_id', 'stop_time' 'stop_id', 'stop_sequence'], \
 					'stops': ['stop_id', 'stop_desc', 'lat', 'lon'], \
 					'trips': ['route_id', 'trip_id']
 					}
