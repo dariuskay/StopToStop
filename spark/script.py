@@ -27,7 +27,9 @@ def add_schedule_difference(df, window):
 	"""
 	time_diff = df['stop_time'].cast('long') - f.lag(df['stop_time']).over(window).cast('long')
 
-	df = df.withColumn('schedule_delta', time_diff)
+	df = df.withColumn('schedule_delta', time_diff) 
+
+	return df
 
 def vehicle_pos_to_df(file, sparkSession):
 	""" 
@@ -49,7 +51,7 @@ def pos_stop_initial_join(stops_df, pos_df):
 	"""
 	common_cols = ['trip_id', 'stop_id', 'route_id']
 	return pos_df.join(stops_df, common_cols) \
-		.groupby('route_id', 'trip_id', 'stop_id', 'stop_sequence', 'schedule_delta') \
+		.groupby('route_id', 'trip_id', 'stop_id', 'stop_sequence') \
 		.agg(f.min('timestamp').alias('min_timestamp')) \
 		.orderBy('trip_id', 'stop_id')
 
@@ -74,10 +76,10 @@ def df_with_window_time_diff(df, window):
 		df['route_id'], \
 		df['stop_sequence'], \
 		df['min_timestamp'], \
-		df['schedule_delta'], \
+#		df['schedule_delta'], \
 		time.alias('time_delta'), \
 		seq_delta.alias('seq_delta'), \
-		time_per_stop.alias('time/stop'))
+		time_per_stop.alias('time/stop')) \
 		.fillna(6666.6666, subset=['time/stop'])
 
 def join_window_df_with_stops_df(windowdf, stopsdf):
@@ -94,9 +96,6 @@ def join_window_df_with_stops_df_sql(table1, table2, sqlContext):
 	with windowed stops table, returning DataFrame.
 	"""
 	to_join =  sqlContext.sql('SELECT * FROM '+table1+' WHERE '+table1+'.trip_id IN (SELECT DISTINCT trip_id FROM '+table2+')')
-	print('FROM WITHIN join_window_df_with_stops_df_sql')
-	print('SUBQUERIED')
-	to_join.show()
 	to_join.createOrReplaceTempView('subqueried')
 	
 	return sqlContext.sql('SELECT subqueried.*, '+table2+'.min_timestamp, '+table2+'.time_delta, '+table2+'.seq_delta, '+table2+'.`time/stop` FROM subqueried LEFT JOIN '+table2+' ON subqueried.trip_id='+table2+'.trip_id AND subqueried.stop_id='+table2+'.stop_id AND subqueried.stop_sequence='+table2+'.stop_sequence ORDER BY trip_id, stop_sequence')	
@@ -122,12 +121,11 @@ def df_with_window_backfill(df, window1, window2):
 	columns_to_return = ['trip_id', 'stop_id', 'prev_stop', 'stop_sequence', 'route_id', 'filled_ts', 'day', 'hour', 'week', 'diff_schedule_real']
 	df = df.filter(df.filled_ts.isNotNull()) \
 		.filter((df.filled_ts > 0)) \
-		.filter((df.filled_ts != 6666.6666))
+		.filter((df.filled_ts != 6666.6666)) \
 		.select(*columns_to_return)
 
 	return df
 
-replace_dummy = udf(lambda timefill: None if timefill == 6666.6666 else timefill, types.DoubleType())
 
 if  __name__ == '__main__':
 	scSpark = SparkSession.builder.appName('Stop to Stop').getOrCreate()
@@ -198,5 +196,7 @@ if  __name__ == '__main__':
 	df_backfilled = df_with_window_backfill(stop_times_joined_df, window_look_back_one_order_seq, window_look_forward_many)
 	
 	datestring = date.strftime("%Y-%m-%d")
+	
+	print('Saving to S3...')
 	
 	df_backfilled.write.save('s3a://stoptostop/preprocessed/'+datestring+'-preprocessed.csv', formate='csv', header=True)	
