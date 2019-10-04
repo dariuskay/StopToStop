@@ -44,7 +44,7 @@ t3 = BashOperator(
 
 t4 = BashOperator(
 	task_id='spark-submit-one',
-	bash_command='spark-submit --master spark://'+dns+':7077 ~/sts2/script.py hdfs://'+dns+':8000/data/schedule_agglom.csv hdfs://'+dns+':8000/data/'+datestring[6:]+'-bus-positions.csv hdfs://'+dns+':8000/data/trips_agglom.csv',
+	bash_command='spark-submit --master spark://'+dns+':7077 ~/sts2/script.py hdfs://'+dns+':9000/data/stop_times_agglom.csv hdfs://'+dns+':9000/data/'+datestring[8:]+'-bus-positions.csv hdfs://'+dns+':9000/data/trips_agglom.csv',
 	dag=dag)
 
 t5 = BashOperator(
