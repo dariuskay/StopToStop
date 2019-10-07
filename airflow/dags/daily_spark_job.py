@@ -24,7 +24,6 @@ today = date.today() - timedelta(days=2)
 datestring = today.strftime('%Y/%m/%Y-%m-%d')
 filestring = 'https://s3.amazonaws.com/nycbuspositions/' + datestring + '-bus-positions.csv.xz'
 
-# t1, t2 and t3 are examples of tasks created by instantiating operators
 t1 = BashOperator(
 	task_id='wget-positions-file',
 	bash_command='wget '+filestring + ' -P ~/data/',
@@ -56,5 +55,3 @@ t5.set_upstream(t4)
 t4.set_upstream(t3)
 t3.set_upstream(t2)
 t2.set_upstream(t1)
-
-

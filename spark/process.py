@@ -9,6 +9,13 @@ import copy
 import config
 import datetime
 
+def read_files(filestring):
+	""" Opens all S3 bucket files and returns as DataFrame. """
+	preprocessed_df = scSpark.read.parquet(filestring)
+	preprocessed_df = preprocessed_df.withColumn('stop_id', preprocessed_df['stop_id'].cast(types.IntegerType()))
+	preprocessed_df = preprocessed_df.withColumn('prev_stop', preprocessed_df['prev_stop'].cast(types.IntegerType()))
+	return preprocessed_df
+
 def average_by(dataframe, period):
 	""" Calculates averages by time period PERIOD over DATAFRAME. Returns DataFrame. """
 	df = dataframe.groupby('route_id', 'stop_id', 'prev_stop', 'stop_sequence', period) \
@@ -43,11 +50,11 @@ def write_to_postgres(dataframe, period, properties):
                		table=period, mode='overwrite', properties=properties)
 
 def write_total(dataframe, properties):
+	""" Creates table in PostgreSQL ungrouped but averaged. Expensive write. """
 	dataframe.write.option("createTableColumnTypes", "route_id CHAR(8), stop_id INTEGER, prev_stop INTEGER, stop_sequence SMALLINT, week SMALLINT, day SMALLINT, hour CHAR(8), time_per_stop FLOAT, diff_per_stop FLOAT, idx LONG") \
                 .option('numParitions', 3) \
                 .jdbc(url=config.url, \
                         table='total', mode='overwrite', properties=properties)
-
 
 if  __name__ == '__main__':
 	scSpark = SparkSession.builder.appName('Stop to Stop: Analytics').getOrCreate()
@@ -55,39 +62,22 @@ if  __name__ == '__main__':
 	sqlCon = SQLContext(scSpark)	
 
 	preprocessed_file = 's3a://stoptostop/preprocessed/*-preprocessed.csv/*'	
-	preprocessed_df = scSpark.read.parquet(preprocessed_file)
-	preprocessed_df = preprocessed_df.withColumn('stop_id', preprocessed_df['stop_id'].cast(types.IntegerType()))
-	preprocessed_df = preprocessed_df.withColumn('prev_stop', preprocessed_df['prev_stop'].cast(types.IntegerType()))
-	preprocessed_df.show()
+	preprocessed_df = read_files(preprocessed_file)
 
-#	week = average_by(preprocessed_df, 'week')
 	binned = assign_hour(preprocessed_df)
-	print(binned.head(10))
-	total = aggregate(binned)
 
-#	print('WEEK')
-#	print(week.head(10))
+	week = average_by(preprocessed_df, 'week')
 
-#	day = average_by(preprocessed_df, 'day')
+	day = average_by(preprocessed_df, 'day')
 
-#	hour = average_by(preprocessed_df, 'hour')
+	hour = average_by(preprocessed_df, 'hour')
 	
 	properties = {
             "user": config.postgresUser,
             "password": config.postgresPassword,
 			"batchsize": "30000"
         }
-	write_total(total, properties)	
-#	write_to_postgres(week, 'week', properties)
-#	write_to_postgres(day, 'day', properties)
-#	write_to_postgres(hour, 'hour', properties)
-#	week.write.option("createTableColumnTypes", "route_id CHAR(8), stop_id INTEGER, stop_sequence SMALLINT, week SMALLINT, time_per_stop FLOAT, diff_per_stop FLOAT, idx LONG") \
-#		.option('numParitions', 3) \
-#			.jdbc(url=config.url, \
-#               		table="week", mode='overwrite', properties=properties)
-#	day.write.option('createTableColumnTypes', 'route_id CHAR(8), stop_id INTEGER, stop_sequence SMALLINT, day SMALLINT, time_per_stop FLOAT, diff_per_stop FLOAT, idx LONG') \
-#			.option('numPartitions', 3) \
-#			.jdbc(url=config.url, table='day', mode='overwrite', properties=properties)
-#	hour.write.option('createTableColumnTypes', 'route_id CHAR(8), stop_id INTEGER, stop_sequence SMALLINT, hour SMALLINT, time_per_stop FLOAT, diff_per_stop FLOAT, idx LONG') \
-#			.option('numPartitions', 3) \
-#			.jdbc(url=config.url, table='hour', mode='overwrite', properties=properties)
+
+	write_to_postgres(week, 'week', properties)
+	write_to_postgres(day, 'day', properties)
+	write_to_postgres(hour, 'hour', properties)
