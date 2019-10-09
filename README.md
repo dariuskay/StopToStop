@@ -21,7 +21,7 @@ This automated pipeline uses vehicle position data gathered by MTA of New York C
 
 MTA of NYC stores vehicle position data, generated every ~2-5 minutes, in a publicly accessible bucket on **AWS S3**. Via a daily **Airflow** job, StopToStop downloads the data from the most recent day and decompresses the data before storing it in **HDFS** so that it can be read from worker nodes. (Though I have seen an XZ-decompressing codec used for Spark in Scala, I could not get it to be operational in pyspark.) The position data, joined with GTFS-static schedule data, is used to calculate approximate times spent between one stop and the next. To avoid costly Postgres queries that are forced to take groupby-aggregations of this data, I then store these preprocessed results in an S3 bucket. The preprocessed data is then aggregated in another Spark job (process.py) to render tables for week, day, and hour averages for each stop-to-stop interval. The results are fed into a **AWS RDS Postgres** instance, wherefrom they are retrieved and visualized in **Tableau**.
 
-![Screen Shot 2019-10-08 at 5.53.24 PM](assets/Screen Shot 2019-10-08 at 5.53.24 PM.png)
+![Pipeline](assets/pipeline.png)
 
 #### Interesting GTFS data quirks
 
